@@ -122,3 +122,45 @@ def test_baixar_nao_repete_4xx(tmp_path):
         with pytest.raises(requests.HTTPError):
             coleta.baixar("http://x", tmp_path / "x.zip")
     assert get.call_count == 1
+
+
+# ---------------------------------------------------------------- Task 3: Parquet
+
+
+def _linhas_fixture() -> int:
+    with open(FIXTURE, "rb") as f:
+        return sum(1 for _ in f) - 1
+
+
+def test_parquet_preserva_linhas(tmp_path):
+    n = coleta.csv_para_parquet([FIXTURE], 2024, destino=tmp_path)
+    assert n == _linhas_fixture() == 30
+    assert coleta.ler_bronze(tmp_path).count_rows() == 30
+
+
+def test_parquet_acentos_latin1(tmp_path):
+    coleta.csv_para_parquet([FIXTURE], 2024, destino=tmp_path)
+    tab = coleta.ler_bronze(tmp_path).to_table()
+    valores = set(tab["DS_GRAU_ESCOLARIDADE"].to_pylist())
+    assert "ENSINO MÉDIO COMPLETO" in valores
+
+
+def test_parquet_idempotente(tmp_path):
+    coleta.csv_para_parquet([FIXTURE], 2024, destino=tmp_path)
+    coleta.csv_para_parquet([FIXTURE], 2024, destino=tmp_path)
+    assert coleta.ler_bronze(tmp_path).count_rows() == 30
+
+
+def test_esquemas_diferentes_unificam(tmp_path):
+    novo = tmp_path / "novo.csv"
+    antigo = tmp_path / "antigo.csv"
+    novo.write_bytes(b'"SG_UF";"QT_APTOS";"QT_COMPARECIMENTO_TTE"\r\n"AC";5;1\r\n')
+    antigo.write_bytes(b'"SG_UF";"QT_APTOS"\r\n"AC";7\r\n')
+    dest = tmp_path / "pq"
+    coleta.csv_para_parquet([antigo], 2018, destino=dest)
+    coleta.csv_para_parquet([novo], 2024, destino=dest)
+    tab = coleta.ler_bronze(dest).to_table()
+    assert "QT_COMPARECIMENTO_TTE" in tab.column_names
+    por_ano = dict(zip(tab["ano"].to_pylist(), tab["QT_COMPARECIMENTO_TTE"].to_pylist()))
+    assert por_ano[2018] is None
+    assert por_ano[2024] == "1"

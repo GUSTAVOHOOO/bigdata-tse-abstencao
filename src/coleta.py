@@ -1,5 +1,7 @@
 """Coleta dos dados do TSE: download com retry, extracao e metadados."""
 import argparse
+import csv
+import shutil
 import sys
 import time
 import zipfile
@@ -8,12 +10,16 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.csv as pacsv
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import requests
 
 if __package__ in (None, ""):  # execucao direta: python src/coleta.py
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import ANOS, ENCODING, REPORTS, SEP, TSE_BRONZE, URL_TSE
+from src.config import ANOS, BRONZE, ENCODING, REPORTS, SEP, TSE_BRONZE, URL_TSE
 
 T = TypeVar("T")
 CHUNK = 1024 * 1024
@@ -186,14 +192,129 @@ def coletar(ano: int) -> list[Path]:
     return csvs
 
 
+PARQUET = BRONZE / "tse_parquet"  # hive: ano=YYYY/SG_UF=XX/*.parquet
+BLOCK_SIZE = 64 * 1024 * 1024
+
+
+def _cabecalho(csv_path: Path) -> list[str]:
+    with open(csv_path, "r", encoding=ENCODING, newline="") as f:
+        return [c.strip().upper() for c in next(csv.reader(f, delimiter=SEP))]
+
+
+def csv_para_parquet(csvs: list[Path], ano: int, destino: Path = PARQUET) -> int:
+    """Converte os CSVs de um ano para Parquet (zstd) particionado em ano/SG_UF.
+
+    Streaming (blocos de 64 MB); todas as colunas como string; idempotente:
+    a particao ano=YYYY e' apagada antes de gravar. Retorna linhas gravadas.
+    """
+    destino = Path(destino)
+    shutil.rmtree(destino / f"ano={ano}", ignore_errors=True)
+    particao = ds.partitioning(pa.schema([("ano", pa.int16()), ("SG_UF", pa.string())]),
+                               flavor="hive")
+    total = 0
+    for csv_path in map(Path, csvs):
+        nomes = _cabecalho(csv_path)
+        reader = pacsv.open_csv(
+            csv_path,
+            read_options=pacsv.ReadOptions(encoding=ENCODING, block_size=BLOCK_SIZE,
+                                           column_names=nomes, skip_rows=1),
+            parse_options=pacsv.ParseOptions(delimiter=SEP),
+            convert_options=pacsv.ConvertOptions(column_types={n: pa.string() for n in nomes}),
+        )
+
+        def lotes():
+            nonlocal total
+            for lote in reader:
+                total += lote.num_rows
+                yield lote.append_column("ano", pa.array([ano] * lote.num_rows, pa.int16()))
+
+        esquema = reader.schema.append(pa.field("ano", pa.int16()))
+        ds.write_dataset(
+            pa.RecordBatchReader.from_batches(esquema, lotes()), destino,
+            format="parquet", partitioning=particao,
+            basename_template=f"{csv_path.stem}-{{i}}.parquet",
+            existing_data_behavior="overwrite_or_ignore",
+            file_options=ds.ParquetFileFormat().make_write_options(compression="zstd"),
+            min_rows_per_group=100_000, max_rows_per_group=1_000_000,
+        )
+    return total
+
+
+def ler_bronze(raiz: Path = PARQUET) -> ds.Dataset:
+    """Dataset da bronze com esquema unificado (coluna ausente num ano = nula)."""
+    raiz = Path(raiz)
+    particao = ds.partitioning(pa.schema([("ano", pa.int16()), ("SG_UF", pa.string())]),
+                               flavor="hive")
+    base = ds.dataset(raiz, format="parquet", partitioning=particao)
+    esquemas = [f.physical_schema for f in base.get_fragments()]
+    unificado = pa.unify_schemas(esquemas, promote_options="permissive")
+    for campo in particao.schema:
+        if campo.name not in unificado.names:
+            unificado = unificado.append(campo)
+    return ds.dataset(raiz, format="parquet", partitioning=particao, schema=unificado)
+
+
+def _tamanho_mb(caminhos: list[Path]) -> float:
+    return sum(Path(c).stat().st_size for c in caminhos) / 1024**2
+
+
+def _tempo(func: Callable[[], object]) -> float:
+    t0 = time.perf_counter()
+    func()
+    return time.perf_counter() - t0
+
+
+def benchmark(csv: Path, parquet_dir: Path = PARQUET) -> dict:
+    """Compara CSV x Parquet no maior arquivo e no total; salva reports/benchmark_csv_parquet.csv."""
+    csv, parquet_dir = Path(csv), Path(parquet_dir)
+    ano = int(csv.stem.split("_")[-2])
+    uf = csv.stem.split("_")[-1]
+    part = parquet_dir / f"ano={ano}" / f"SG_UF={uf}"
+    pqs = sorted(part.glob("*.parquet"))
+    ler_pq = lambda: pq.read_table(part)  # noqa: E731
+    ler_csv = lambda: pacsv.read_csv(  # noqa: E731
+        csv, read_options=pacsv.ReadOptions(encoding=ENCODING),
+        parse_options=pacsv.ParseOptions(delimiter=SEP))
+    pd_csv = lambda: pd.read_csv(csv, sep=SEP, encoding=ENCODING, dtype=str)  # noqa: E731
+    pd_pq = lambda: pd.read_parquet(part)  # noqa: E731
+
+    def linha(nome: str, mb_csv: float, mb_pq: float, t_csv: float, t_pq: float) -> dict:
+        return {"comparacao": nome, "tamanho_csv_mb": round(mb_csv, 2),
+                "tamanho_parquet_mb": round(mb_pq, 2),
+                "reducao_pct": round(100 * (1 - mb_pq / mb_csv), 1),
+                "t_leitura_csv_s": round(t_csv, 2) if t_csv is not None else None,
+                "t_leitura_parquet_s": round(t_pq, 2) if t_pq is not None else None}
+
+    mb_csv, mb_pq = _tamanho_mb([csv]), _tamanho_mb(pqs)
+    todos_csv = [c for c in TSE_BRONZE.rglob("*.csv")] if csv.is_relative_to(TSE_BRONZE)         else list(csv.parent.rglob("*.csv"))
+    todos_pq = list(parquet_dir.rglob("*.parquet"))
+    linhas = [
+        linha(f"pyarrow_{csv.stem}", mb_csv, mb_pq, _tempo(ler_csv), _tempo(ler_pq)),
+        linha(f"pandas_{csv.stem}", mb_csv, mb_pq, _tempo(pd_csv), _tempo(pd_pq)),
+        linha("total_bronze", _tamanho_mb(todos_csv), _tamanho_mb(todos_pq), None, None),
+    ]
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(linhas).to_csv(REPORTS / "benchmark_csv_parquet.csv", index=False)
+    return linhas[0]
+
+
+def _maior_csv() -> Path:
+    return max(TSE_BRONZE.rglob("perfil_*_??.csv"), key=lambda c: c.stat().st_size)
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Coleta TSE: perfil comparecimento/abstencao")
     p.add_argument("--anos", nargs="+", type=int, default=ANOS)
+    p.add_argument("--benchmark", action="store_true",
+                   help="so roda o benchmark CSV x Parquet no maior CSV")
     args = p.parse_args(argv)
+    if args.benchmark:
+        print(benchmark(_maior_csv(), PARQUET))
+        return
     for ano in args.anos:
         csvs = coletar(ano)
         print(f"{ano}: {len(csvs)} CSVs")
-        # Task 3: converter_para_parquet(csvs, ano)
+        print(f"{ano}: {csv_para_parquet(csvs, ano)} linhas em Parquet")
 
 
 if __name__ == "__main__":

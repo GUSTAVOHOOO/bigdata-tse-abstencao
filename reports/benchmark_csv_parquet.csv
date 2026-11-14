@@ -1,0 +1,4 @@
+comparacao,tamanho_csv_mb,tamanho_parquet_mb,reducao_pct,t_leitura_csv_s,t_leitura_parquet_s
+pyarrow_perfil_comparecimento_abstencao_2024_SP,419.37,12.61,97.0,1.15,0.54
+pandas_perfil_comparecimento_abstencao_2024_SP,419.37,12.61,97.0,11.95,0.53
+total_bronze,8311.75,217.49,97.4,,
