@@ -1,0 +1,12 @@
+.superpowers/
+
+# Dados brutos e tratados (grandes): ignorar tudo, exceto os .gitkeep das pastas
+data/**
+!data/**/
+!data/**/.gitkeep
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+*.zip
+*.csv
+*.parquet
