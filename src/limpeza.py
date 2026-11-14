@@ -21,6 +21,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,14 +40,19 @@ AUSENTES_PATH = REPORTS / "ausentes_antes_depois.csv"
 METADADOS_PATH = SILVER / "tse_metadados.json"
 
 NAO_INFORMADO = "NÃO INFORMADO"
-COLUNAS_LOG = ["problema", "decisao", "justificativa", "linhas_antes", "linhas_depois", "linhas_afetadas"]
+COLUNAS_LOG = ["problema", "decisao", "justificativa", "unidade", "linhas_antes", "linhas_depois",
+               "linhas_afetadas"]
+UNIDADES = ("linhas", "celulas")
 
 # Dimensões de perfil que só têm valor informado em 2024 (EDA, item 4).
 PERFIL_2024 = ["cor_raca", "quilombola", "interprete_libras", "identidade_genero",
                "idioma_indigena", "grupo_indigena"]
 COLUNAS_2024 = [f"{p}_{v}" for v in PERFIL_2024 for p in ("cd", "ds")]
 # Código 0 = não informado, fora do LEIAME (EDA, item 5).
+CODIGO_ZERO = "0"
 CODIGO_ZERO_SENTINELA = {"cd_genero", "cd_estado_civil", "cd_grau_escolaridade"}
+# Rótulos que acompanham um código sentinela e não estão em SENTINELAS (faixa -3 = "Inválido").
+ROTULOS_SENTINELA = {"ds_faixa_etaria": {"Inválido"}}
 ANALFABETO = 1  # cd_grau_escolaridade (dicionário de dados)
 SUPERIOR_COMPLETO = 8
 # Par ausente do de-para: mesmo nome e UF no TSE 2024 e na API de localidades do IBGE (EDA, item 7).
@@ -67,72 +73,143 @@ REGIAO_UF = {
     **dict.fromkeys(["ES", "MG", "RJ", "SP"], "Sudeste"),
     **dict.fromkeys(["PR", "RS", "SC"], "Sul"),
 }
+# Datas oficiais dos turnos (calendários eleitorais do TSE). Em 2020 a eleição foi adiada de outubro
+# para novembro pela Emenda Constitucional 107/2020, por causa da pandemia de covid-19.
+DATAS_TURNO: dict[int, dict[int, date]] = {
+    2018: {1: date(2018, 10, 7), 2: date(2018, 10, 28)},
+    2020: {1: date(2020, 11, 15), 2: date(2020, 11, 29)},
+    2022: {1: date(2022, 10, 2), 2: date(2022, 10, 30)},
+    2024: {1: date(2024, 10, 6), 2: date(2024, 10, 27)},
+}
 FAIXAS_AGRUPADAS = ["16–17", "18–24", "25–34", "35–44", "45–59", "60–69", "70+"]
 GRUPOS_IDADE = ["16–17", "18–69", "70+"]
 
-# Texto do log: (problema, decisão, justificativa). Passou pela revisão de estilo (humanizer).
+# Texto do log: (problema, decisão, justificativa, unidade). Passou pela revisão de estilo (humanizer).
+# unidade "linhas": linhas_antes/depois/afetadas contam linhas; "celulas": contam células das colunas
+# examinadas (linhas × colunas). Etapas que não removem nem marcam registram 0 afetadas.
 TEXTOS = {
     "1": ("#1 Eleitorado repetido entre turnos",
           "Manter nr_turno e criar tem_2o_turno (município teve 2º turno no ano). Toda taxa é calculada dentro de um turno.",
           "Nas gerais o 2º turno repete os aptos do 1º em todos os municípios (147.306.275 em 2018). "
-          "Somar aptos entre turnos dobraria o denominador. Linhas afetadas = linhas marcadas com tem_2o_turno."),
+          "Somar aptos entre turnos dobraria o denominador. Afetadas = linhas marcadas com tem_2o_turno.",
+          "linhas"),
     "2": ("#2 Chave da linha não é única (células partidas)",
           "Somar todas as qt_* pela chave completa (ano, turno, UF, município, zona e códigos de perfil). Nenhum duplicado é apagado.",
           "Os 1.979 duplicados exatos da EDA são pedaços de uma mesma célula, quase sempre com 1 eleitor. "
-          "Apagá-los tiraria eleitores reais; somar devolve uma linha por chave com os mesmos totais."),
+          "Apagá-los tiraria eleitores reais; somar devolve uma linha por chave com os mesmos totais. "
+          "Afetadas = linhas absorvidas pela soma.",
+          "linhas"),
     "3": ("#3 Exterior (ZZ) misturado aos municípios",
           "Criar a coluna exterior e manter as linhas na silver, sem código IBGE e sem região.",
           "Abstenção de 59,1% (2018) e 51,7% (2022) contra cerca de 20% no país. Fica no total nacional e sai das "
-          "análises por município, UF e IBGE. Linhas afetadas = linhas marcadas como exterior."),
+          "análises por município, UF e IBGE. Afetadas = linhas marcadas como exterior.",
+          "linhas"),
     "4a": ("#4 Colunas de perfil que só existem em 2024 (-1 vira nulo)",
-           "Converter o código -1 em nulo nas seis dimensões de 2024. Linhas afetadas = células de código anuladas.",
-           "O LEIAME usa -1 para não informado. Em 2018–2022 essas colunas trazem -1 em todas as linhas."),
+           "Converter o código -1 em nulo nas seis dimensões de 2024, em vez de tratá-lo como uma categoria. "
+           "Afetadas = células de código anuladas, sobre as células das seis colunas.",
+           "O LEIAME usa -1 para não informado, e em 2018–2022 essas colunas trazem -1 em todas as linhas. "
+           "Viés: em 2024 só 10,2% dos aptos declararam cor/raça, e eles se abstêm menos (16,6% contra 22,3% dos "
+           "que não declararam). Uma taxa por cor/raça feita só com os informados descreve esse grupo menor e "
+           "não o eleitorado.",
+           "celulas"),
     "4b": ("#4 Colunas de perfil que só existem em 2024 (remoção e reagregação)",
            "Tirar da silver as 12 colunas de cor/raça, quilombola, Libras, identidade de gênero, idioma e grupo indígena e reagregar pela chave comum aos quatro anos.",
            "Não há série histórica: cor/raça não é informada para 89,8% dos aptos de 2024. As colunas partem as "
-           "células (as de 1 eleitor passam de 24% para 44%) e impedem uma chave comum entre os anos."),
+           "células (as de 1 eleitor passam de 24% para 44%) e impedem uma chave comum entre os anos. "
+           "Viés: a silver não permite analisar 2024 por cor/raça, quilombolas, Libras, identidade de gênero ou "
+           "povos indígenas. Quem precisar disso volta à bronze de 2024, sabendo que o resultado vale para os "
+           "10% de aptos que declararam. Afetadas = linhas absorvidas pela reagregação.",
+           "linhas"),
     "5": ("#5 Sentinelas nas dimensões de perfil (código 0 e faixa -3)",
-          "Código 0 em gênero, estado civil e escolaridade e faixa -3 viram nulo no cd_*; o ds_* recebe o rótulo único NÃO INFORMADO.",
+          "Código 0 em gênero, estado civil e escolaridade e faixa -3 viram nulo no cd_*; o ds_* recebe o rótulo "
+          "único NÃO INFORMADO. As linhas ficam nos totais e saem das análises por perfil. Afetadas = células de "
+          "código anuladas, sobre as células das quatro dimensões.",
           "O código 0 não consta no LEIAME e a faixa -3 é idade inválida. Somam no máximo 0,065% dos aptos por ano. "
-          "As linhas ficam nos totais e saem das análises por perfil. Linhas afetadas = células de código anuladas."),
+          "Viés: esses eleitores se abstêm muito mais que os demais (38% a 59% no 1º turno, contra 20% a 23%), então "
+          "as taxas por gênero, estado civil, escolaridade e idade descrevem os cadastros completos e ficam um pouco "
+          "abaixo da taxa geral. Pelo tamanho do grupo, a diferença é de no máximo 0,02 ponto percentual.",
+          "celulas"),
     "6": ("#6 Abstenção muito alta nas faixas mais velhas (cadastro desatualizado?)",
-          "Manter os dados oficiais e criar grupo_idade (16–17, 18–69, 70+) e faixa_etaria_agrupada. Linhas afetadas = linhas de 90 anos ou mais, que a análise de sensibilidade exclui.",
+          "Manter os dados oficiais e criar grupo_idade (16–17, 18–69, 70+) e faixa_etaria_agrupada. Afetadas = "
+          "linhas de 90 anos ou mais, o conjunto que a análise de sensibilidade exclui (nenhum valor muda).",
           "Abstenção de 88% a 95% aos 90–94 anos e acima de 96% a partir dos 95. O voto facultativo explica parte; "
-          "a hipótese de cadastro desatualizado não foi testada e entra como limitação."),
+          "a hipótese de cadastro desatualizado não foi testada e entra como limitação.",
+          "linhas"),
     "7a": ("#7 Município sem par no de-para TSE → IBGE (par acrescentado)",
-           "Acrescentar o par 73709 → 5101837 (Boa Esperança do Norte, MT). Linhas afetadas = linhas casadas só por esse par.",
+           "Acrescentar o par 73709 → 5101837 (Boa Esperança do Norte, MT). Afetadas = linhas casadas só por esse par.",
            "Mesmo nome e mesma UF no arquivo do TSE de 2024 e na API de localidades do IBGE "
-           "(servicodados.ibge.gov.br/api/v1/localidades/municipios). O IBGE ainda não publica população nem PIB do município."),
+           "(servicodados.ibge.gov.br/api/v1/localidades/municipios). O IBGE ainda não publica população nem PIB do município.",
+           "linhas"),
     "7b": ("#7 Linhas sem par no IBGE depois da junção",
-           "Manter as linhas com cd_municipio_ibge nulo e contá-las. Linhas afetadas = linhas sem código IBGE.",
-           "Sobram só as linhas do exterior (ZZ), que não têm município no IBGE. As junções usam apenas o código."),
+           "Manter as linhas com cd_municipio_ibge nulo e contá-las. linhas_depois é medido na tabela já juntada. "
+           "Afetadas = linhas sem código IBGE.",
+           "Na execução de referência sobraram só as linhas do exterior (ZZ), que não têm município no IBGE. "
+           "As junções usam apenas o código.",
+           "linhas"),
     "8": ("#8 Todas as colunas em texto",
-          "Renomear para snake_case e tipar: qt_* int32, códigos Int8/Int16, nr_zona int16, ds_*, sg_uf e nome do município category, cd_municipio texto de 5 caracteres.",
+          "Renomear para snake_case e tipar: qt_* int32, códigos Int8/Int16, nr_zona int16, ds_*, sg_uf e nome do "
+          "município category, cd_municipio texto de 5 caracteres. Afetadas = 0: a conversão muda o tipo das 43 "
+          "colunas, sem remover linhas nem mudar valores.",
           "A base em texto ocuparia 85,6 GB no pandas contra 9,0 GB tipada, e a máquina tem 15,4 GB de RAM. "
-          "Tipar também evita comparar '08' com '8'. A conversão não perdeu valor em nenhuma linha."),
+          "Tipar também evita comparar '08' com '8'. A conversão não perdeu valor em nenhuma linha.",
+          "linhas"),
     "9": ("#9 Falta o tipo de eleição; colunas redundantes",
-          "Derivar tipo_eleicao (geral em 2018 e 2022, municipal em 2020 e 2024). Descartar ano_eleicao depois de conferir que é igual à partição e levar dt_geracao e hh_geracao para tse_metadados.json.",
+          "Derivar tipo_eleicao (geral em 2018 e 2022, municipal em 2020 e 2024). Descartar ano_eleicao depois de "
+          "conferir que é igual à partição e levar dt_geracao e hh_geracao para tse_metadados.json. Afetadas = 0: "
+          "a etapa acrescenta uma coluna e tira três, sem mudar linhas.",
           "As perguntas 1 e 4 comparam eleições gerais e municipais. ano_eleicao repete a partição em 100% das linhas "
-          "e a data de geração tem um valor por ano. Linhas afetadas = linhas que receberam tipo_eleicao."),
+          "e a data de geração tem um valor por ano.",
+          "linhas"),
     "10": ("#10 Rótulos em forma inconsistente",
-           "Passar os ds_* para maiúsculas e tirar espaços extras. Junções só por código. Linhas afetadas = células de rótulo alteradas.",
+           "Passar os ds_* para maiúsculas e tirar espaços extras. Junções só por código. Afetadas = células de "
+           "rótulo alteradas, sobre as células de todas as colunas ds_*.",
            "A faixa etária vinha em minúsculas (\"16 anos\") e as colunas de 2024 misturavam caixa. "
-           "Há 5.751 códigos de município para 5.466 nomes, então juntar por nome trocaria homônimos."),
+           "Há 5.751 códigos de município para 5.466 nomes, então juntar por nome trocaria homônimos.",
+           "celulas"),
     "11": ("#11 Municípios com abstenção extrema",
            "Não remover. A marca outlier_iqr é por município e ano, no 1º turno, e não cabe no grão da silver (célula de perfil): será calculada na camada gold (Task 8).",
            "A EDA achou 21, 4, 63 e 22 outliers pelo IQR, concentrados no Jequitinhonha (MG) e no interior do AM. "
-           "São casos reais (emigração, distância) e o objeto da análise. Nenhuma linha muda nesta etapa."),
+           "São casos reais (emigração, distância) e o objeto da análise. Nenhuma linha muda nesta etapa.",
+           "linhas"),
     "12": ("#12 Combinações implausíveis de perfil",
            "Manter e marcar perfil_implausivel (16–17 anos com superior completo). A escolaridade não é corrigida.",
            "A EDA contou 246, 128, 1.074 e 159 linhas. Não há fonte para corrigir o valor e o peso nas taxas é pequeno. "
-           "Linhas afetadas = linhas marcadas."),
+           "Afetadas = linhas marcadas.",
+           "linhas"),
     "13": ("#13 Variáveis do IBGE de fontes diferentes",
-           "Guardar fonte_populacao e ano_pib em cada linha integrada. Usar log10 e Spearman nas correlações. Linhas afetadas = linhas com população do Censo ou PIB de outro ano.",
+           "Guardar fonte_populacao e ano_pib em cada linha integrada. Usar log10 e Spearman nas correlações. "
+           "Afetadas = linhas com população do Censo ou PIB de outro ano (nenhum valor muda).",
            "A população de 2022 vem do Censo e a dos outros anos da estimativa; o PIB de 2024 é o de 2023. "
-           "O PIB per capita chega a R$ 842 mil, com distribuição muito assimétrica."),
+           "O PIB per capita chega a R$ 842 mil, com distribuição muito assimétrica.",
+           "linhas"),
+    "facultativo": ("(derivação) voto_facultativo sem idade ou escolaridade",
+                    "voto_facultativo = 16–17 anos, 70 anos ou mais ou analfabeto (CF, art. 14, § 1º, II). Fica nulo "
+                    "quando a idade ou a escolaridade é desconhecida e a regra não decide. Afetadas = linhas com "
+                    "voto_facultativo nulo.",
+                    "São 11 mil a 34 mil aptos por ano (0,007% a 0,023%), quase todos com escolaridade não informada. "
+                    "O TSE conta todos como obrigatórios. Viés: um analfabeto sem escolaridade registrada seria "
+                    "facultativo e entra como obrigatório na conta do TSE, o que subestima um pouco os facultativos. "
+                    "O grupo se abstém de 15% a 19%, perto dos obrigatórios, e somá-lo a eles não muda a taxa dos "
+                    "obrigatórios na segunda casa decimal.",
+                    "linhas"),
+    "mes_ano": ("(derivação) Mês e ano da eleição",
+                "Criar data_turno (data oficial de cada turno no calendário do TSE) e mes_ano (AAAA-MM). Afetadas = 0: "
+                "as colunas novas não mudam linhas.",
+                "As perguntas comparam anos e tipos de eleição, e a data situa cada turno. Em 2020 a eleição foi em "
+                "novembro (15 e 29), adiada pela Emenda Constitucional 107/2020 por causa da pandemia; nos outros "
+                "anos foi em outubro.",
+                "linhas"),
+    "taxa_100k": ("(derivação) Abstenções por 100 mil habitantes",
+                  "Não calcular na silver. A gold calcula abstencoes_por_100k_hab por município, ano e turno.",
+                  "A taxa usa a população do município, e a silver tem uma linha por célula de perfil (zona, gênero, "
+                  "idade, escolaridade). Dividir a abstenção de uma célula pela população do município inteiro não "
+                  "mede nada. A conta só faz sentido depois de somar as células do município. Nenhuma linha muda.",
+                  "linhas"),
     "consistencia": ("(validação) Aptos diferente de comparecimento + abstenção",
-                     "Marcar inconsistente quando qt_aptos ≠ qt_comparecimento + qt_abstencao, sem remover.",
-                     "Regra contábil do arquivo. A EDA não achou nenhuma violação, e a marca confirma isso na silver."),
+                     "Marcar inconsistente quando qt_aptos ≠ qt_comparecimento + qt_abstencao, sem remover. "
+                     "Afetadas = linhas marcadas.",
+                     "Regra contábil do arquivo. A EDA não achou nenhuma violação, e a marca confirma isso na silver.",
+                     "linhas"),
 }
 
 
@@ -146,21 +223,29 @@ class LogLimpeza:
         self.metadados: dict[int, dict] = {}
 
     def registrar(self, problema: str, decisao: str, justificativa: str, antes: int, depois: int,
-                  afetadas: int | None = None) -> None:
+                  afetadas: int | None = None, unidade: str = "linhas") -> None:
         """`afetadas` padrão = antes - depois; quando a decisão marca em vez de remover,
-        passe a contagem de linhas (ou células) marcadas."""
+        passe a contagem marcada (ou 0, se nada muda). `unidade` diz se antes/depois/afetadas
+        contam linhas ou células (linhas × colunas examinadas)."""
+        if unidade not in UNIDADES:
+            raise ValueError(f"unidade deve ser uma de {UNIDADES}: {unidade!r}")
         afetadas = int(antes) - int(depois) if afetadas is None else int(afetadas)
         chave = (problema, decisao)
         if chave not in self._linhas:
             self._linhas[chave] = {"problema": problema, "decisao": decisao, "justificativa": justificativa,
-                                   "linhas_antes": 0, "linhas_depois": 0, "linhas_afetadas": 0}
+                                   "unidade": unidade, "linhas_antes": 0, "linhas_depois": 0,
+                                   "linhas_afetadas": 0}
+        elif self._linhas[chave]["unidade"] != unidade:
+            raise ValueError(f"unidade diferente para o mesmo problema: {problema}")
         linha = self._linhas[chave]
         linha["linhas_antes"] += int(antes)
         linha["linhas_depois"] += int(depois)
         linha["linhas_afetadas"] += afetadas
 
     def _texto(self, chave: str, antes: int, depois: int, afetadas: int | None = None) -> None:
-        self.registrar(*TEXTOS[chave], antes=antes, depois=depois, afetadas=afetadas)
+        problema, decisao, justificativa, unidade = TEXTOS[chave]
+        self.registrar(problema, decisao, justificativa, antes=antes, depois=depois, afetadas=afetadas,
+                       unidade=unidade)
 
     def tabela(self) -> pd.DataFrame:
         df = pd.DataFrame(list(self._linhas.values()), columns=COLUNAS_LOG)
@@ -200,26 +285,26 @@ def tratar_sentinelas(df: pd.DataFrame, log: LogLimpeza) -> pd.DataFrame:
     """
     df = df.copy()
     anulados = {"4a": 0, "5": 0}
+    examinadas = {"4a": 0, "5": 0}  # células (linhas × colunas cd_*) de cada grupo
     for col in [c for c in df.columns if _e_codigo(c)]:
         s = df[col]
-        sentinela = s.isin(SENTINELAS)
-        if col in CODIGO_ZERO_SENTINELA:
-            sentinela |= s.astype("string").eq("0").fillna(False)
+        sentinela = s.isin(list(valores_ausentes(col)))
         n = int(sentinela.sum())
         if n:
             df[col] = s.where(~sentinela)
-        anulados["4a" if col in COLUNAS_2024 else "5"] += n
+        grupo = "4a" if col in COLUNAS_2024 else "5"
+        anulados[grupo] += n
+        examinadas[grupo] += len(df)
         ds_col = "ds_" + col[3:]
         if ds_col in df.columns:
             rotulo = df[ds_col]
-            trocar = (sentinela | rotulo.isin(SENTINELAS)) & rotulo.ne(NAO_INFORMADO)
+            trocar = (sentinela | rotulo.isin(valores_ausentes(ds_col))) & rotulo.ne(NAO_INFORMADO)
             if trocar.any():
                 rotulo = rotulo.astype(object).where(~trocar, NAO_INFORMADO)
                 df[ds_col] = rotulo
-    linhas = len(df)
-    if any(c in df.columns for c in COLUNAS_2024):
-        log._texto("4a", linhas, linhas, anulados["4a"])
-    log._texto("5", linhas, linhas, anulados["5"])
+    if examinadas["4a"]:
+        log._texto("4a", examinadas["4a"], examinadas["4a"], anulados["4a"])
+    log._texto("5", examinadas["5"], examinadas["5"], anulados["5"])
     return df
 
 
@@ -250,7 +335,8 @@ def harmonizar_anos(df: pd.DataFrame, log: LogLimpeza) -> pd.DataFrame:
             novo = s.map(_normalizar_rotulo)
             alteradas += int((novo.ne(s) & s.notna()).sum())
             df[col] = novo
-    log._texto("10", len(df), len(df), alteradas)
+    celulas = len(df) * sum(c.startswith("ds_") for c in df.columns)
+    log._texto("10", celulas, celulas, alteradas)
     return df
 
 
@@ -339,7 +425,7 @@ def _idade_inicial(faixa: pd.Series) -> pd.Series:
 
 def derivar(df: pd.DataFrame) -> pd.DataFrame:
     """Colunas derivadas: região, faixas e grupos de idade, voto facultativo, tipo de eleição,
-    exterior e tem_2o_turno.
+    exterior, tem_2o_turno, data_turno (data oficial do turno, DATAS_TURNO) e mes_ano (AAAA-MM).
 
     voto_facultativo segue a CF, art. 14, § 1º, II: 16–17 anos, 70 anos ou mais, ou analfabeto.
     É booleano nullable: com idade e escolaridade desconhecidas, fica nulo.
@@ -361,6 +447,9 @@ def derivar(df: pd.DataFrame) -> pd.DataFrame:
     turno = pd.to_numeric(df["nr_turno"])
     com_2o = set(zip(ano[turno == 2], df.loc[turno == 2, "cd_municipio"].astype(str)))
     df["tem_2o_turno"] = [(a, m) in com_2o for a, m in zip(ano, df["cd_municipio"].astype(str))]
+    datas = {(a, t): pd.Timestamp(d) for a, turnos in DATAS_TURNO.items() for t, d in turnos.items()}
+    df["data_turno"] = pd.to_datetime(pd.Series(list(zip(ano, turno)), index=df.index).map(datas))         .astype("datetime64[s]")
+    df["mes_ano"] = df["data_turno"].dt.strftime("%Y-%m").astype("category")
     return df
 
 
@@ -406,8 +495,6 @@ def integrar_ibge(df: pd.DataFrame, log: LogLimpeza, depara: pd.DataFrame | None
     ibge = cd.map(mapa).where(~exterior)
     df["cd_municipio_ibge"] = ibge.astype("string")
     n = len(df)
-    log._texto("7a", n, n, int(cd.isin(list(extra)).sum()))
-    log._texto("7b", n, n, int(df["cd_municipio_ibge"].isna().sum()))
 
     pop = populacao[["cd_municipio_ibge", "ano", "populacao", "fonte_populacao"]].copy()
     pop["cd_municipio_ibge"] = pop["cd_municipio_ibge"].astype("string")
@@ -430,9 +517,12 @@ def integrar_ibge(df: pd.DataFrame, log: LogLimpeza, depara: pd.DataFrame | None
     df["pib_per_capita"] = m["pib_per_capita"].astype("float64").to_numpy()
     df["ano"] = df["ano"].astype(ano_original)
 
+    depois = len(m)  # validate="many_to_one" garante que a junção não duplica linhas
+    log._texto("7a", n, depois, int(cd.isin(list(extra)).sum()))
+    log._texto("7b", n, depois, int(m["cd_municipio_ibge"].isna().sum()))
     quebra = (m["fonte_populacao"].astype(str).str.startswith("censo")
               | (m["ano_pib"].notna() & (m["ano_pib"] != m["ano"]))).to_numpy()
-    log._texto("13", n, n, int(quebra.sum()))
+    log._texto("13", n, depois, int(quebra.sum()))
     return df
 
 
@@ -457,6 +547,8 @@ SCHEMA_SILVER = pa.schema([
     ("nm_regiao", pa.dictionary(pa.int32(), pa.string())),
     ("exterior", pa.bool_()),
     ("tem_2o_turno", pa.bool_()),
+    ("data_turno", pa.date32()),
+    ("mes_ano", pa.dictionary(pa.int32(), pa.string())),
     ("faixa_etaria_agrupada", pa.dictionary(pa.int32(), pa.string(), ordered=True)),
     ("grupo_idade", pa.dictionary(pa.int32(), pa.string(), ordered=True)),
     ("voto_facultativo", pa.bool_()),
@@ -494,7 +586,7 @@ def limpar_particao(bronze: pd.DataFrame, log: LogLimpeza) -> pd.DataFrame:
     df = tratar_sentinelas(df, log)
     df = harmonizar_anos(df, log)
     df = tipar(df)
-    log._texto("8", len(df), len(df), len(df))
+    log._texto("8", len(df), len(df), 0)
     df = remover_redundantes(df, log)
     df = agregar_por_chave(df, log)
     df = remover_perfil_2024(df, log)
@@ -503,8 +595,11 @@ def limpar_particao(bronze: pd.DataFrame, log: LogLimpeza) -> pd.DataFrame:
     log._texto("1", n, n, int(df["tem_2o_turno"].sum()))
     log._texto("3", n, n, int(df["exterior"].sum()))
     log._texto("6", n, n, int((df["cd_faixa_etaria"] >= 9094).fillna(False).sum()))
-    log._texto("9", n, n, n)
+    log._texto("9", n, n, 0)
+    log._texto("mes_ano", n, n, 0)
+    log._texto("facultativo", n, n, int(df["voto_facultativo"].isna().sum()))
     log._texto("11", n, n, 0)
+    log._texto("taxa_100k", n, n, 0)
     df = marcar_inconsistentes(df, log)
     return integrar_ibge(df, log)
 
@@ -545,6 +640,14 @@ def construir_silver(anos: list[int] = ANOS, log: LogLimpeza | None = None, raiz
 
 
 # --------------------------------------------------------------------------- ausentes
+def valores_ausentes(coluna: str) -> set[str]:
+    """Valores de texto da bronze que `tratar_sentinelas` trata como ausentes nesta coluna (cd_*/ds_*)."""
+    valores = set(SENTINELAS) | ROTULOS_SENTINELA.get(coluna, set())
+    if coluna in CODIGO_ZERO_SENTINELA:
+        valores.add(CODIGO_ZERO)
+    return valores
+
+
 def _sql_lista(valores) -> str:
     return ", ".join("'" + v.replace("'", "''") + "'" for v in sorted(valores))
 
@@ -565,17 +668,10 @@ def ausentes_antes_depois(raiz_bronze: Path | None = None, raiz_silver: Path = S
         exprs = [f'avg(CASE WHEN {regra(c)} THEN 100.0 ELSE 0 END) AS "{c}"' for c in cols]
         return con.sql(f"SELECT {', '.join(exprs)} FROM {fonte}").df().iloc[0]
 
-    sent = _sql_lista(SENTINELAS)
-
     def regra_bronze(c: str) -> str:
         nome = padronizar_colunas(pd.DataFrame(columns=[c])).columns[0]
         if nome.startswith(("cd_", "ds_")) and nome != "cd_municipio":
-            extra = ""
-            if nome in CODIGO_ZERO_SENTINELA:
-                extra = f" OR {c} = '0'"
-            if nome == "ds_faixa_etaria":
-                extra = f" OR {c} = 'Inválido'"
-            return f"{c} IS NULL OR {c} IN ({sent}){extra}"
+            return f"{c} IS NULL OR {c} IN ({_sql_lista(valores_ausentes(nome))})"
         return f"{c} IS NULL"
 
     def regra_silver(c: str) -> str:

@@ -48,6 +48,8 @@ tipo_eleicao,,0.0
 nm_regiao,,0.5363
 exterior,,0.0
 tem_2o_turno,,0.0
+data_turno,,0.0
+mes_ano,,0.0
 faixa_etaria_agrupada,,0.0516
 grupo_idade,,0.0516
 voto_facultativo,,0.2255

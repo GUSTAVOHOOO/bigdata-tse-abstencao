@@ -3,7 +3,9 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
+from src.config import ANOS
 from src.limpeza import (
+    DATAS_TURNO,
     LogLimpeza,
     agregar_por_chave,
     derivar,
@@ -15,6 +17,7 @@ from src.limpeza import (
     salvar_silver,
     tipar,
     tratar_sentinelas,
+    valores_ausentes,
 )
 
 
@@ -33,15 +36,18 @@ def test_log_calcula_afetadas_e_acumula(tmp_path):
     log = LogLimpeza()
     log.registrar("#2 chave", "agregar", "porque sim", antes=10, depois=7)
     log.registrar("#2 chave", "agregar", "porque sim", antes=5, depois=5)
-    log.registrar("#5 sentinelas", "nulo", "LEIAME", antes=5, depois=5, afetadas=3)
+    log.registrar("#5 sentinelas", "nulo", "LEIAME", antes=5, depois=5, afetadas=3, unidade="celulas")
     df = log.tabela()
-    assert list(df.columns) == ["problema", "decisao", "justificativa",
+    assert list(df.columns) == ["problema", "decisao", "justificativa", "unidade",
                                 "linhas_antes", "linhas_depois", "linhas_afetadas"]
+    assert df.set_index("problema")["unidade"].to_dict() == {"#2 chave": "linhas", "#5 sentinelas": "celulas"}
     assert df.set_index("problema").loc["#2 chave", "linhas_afetadas"] == 3
     assert df.set_index("problema").loc["#2 chave", "linhas_antes"] == 15
     assert df.set_index("problema").loc["#5 sentinelas", "linhas_afetadas"] == 3
     log.salvar(tmp_path / "log.csv")
     assert len(pd.read_csv(tmp_path / "log.csv")) == 2
+    with pytest.raises(ValueError):
+        log.registrar("#9", "x", "y", antes=1, depois=1, unidade="metros")
 
 
 def test_snake_case_sem_acento():
@@ -70,7 +76,16 @@ def test_codigo_zero_nas_dimensoes_vira_nulo_e_rotulo_unico():
     assert r["cd_genero"].isna().tolist() == [True, False]
     assert r["ds_genero"].tolist() == ["NÃO INFORMADO", "MASCULINO"]
     assert r["ds_faixa_etaria"].tolist() == ["NÃO INFORMADO", "16 anos"]
-    assert log.tabela()["linhas_afetadas"].sum() == 2  # duas células de código anuladas
+    t = log.tabela()
+    assert t["unidade"].tolist() == ["celulas"]
+    assert t["linhas_afetadas"].sum() == 2  # duas células de código anuladas
+    assert t["linhas_antes"].sum() == 4  # 2 linhas × 2 colunas cd_* examinadas
+
+
+def test_valores_ausentes_compartilhados():
+    assert "0" in valores_ausentes("cd_genero") and "0" not in valores_ausentes("cd_faixa_etaria")
+    assert "Inválido" in valores_ausentes("ds_faixa_etaria")
+    assert {"#NULO#", "-1", "-3", "NÃO INFORMADO"} <= valores_ausentes("cd_cor_raca")
 
 
 def test_harmonizar_rotulos_maiusculos():
@@ -79,7 +94,9 @@ def test_harmonizar_rotulos_maiusculos():
     log = LogLimpeza()
     r = harmonizar_anos(df, log)
     assert r["ds_faixa_etaria"].tolist() == ["16 ANOS", "21 A 24 ANOS", "100 ANOS OU MAIS"]
-    assert log.tabela()["linhas_afetadas"].sum() == 3
+    t = log.tabela()
+    assert t["linhas_afetadas"].sum() == 3 and t["unidade"].tolist() == ["celulas"]
+    assert t["linhas_antes"].sum() == 6  # 3 linhas × 2 colunas ds_*
 
 
 def test_tipar():
@@ -150,6 +167,20 @@ def test_derivar_grupos_e_regiao():
     assert r["tem_2o_turno"].tolist() == [True, True, False]
 
 
+def test_data_turno_e_mes_ano():
+    df = pd.DataFrame([_celula(ano=2020, nr_turno=1), _celula(ano=2020, nr_turno=2),
+                       _celula(ano=2018, nr_turno=2), _celula(ano=2024, nr_turno=1)])
+    r = derivar(df)
+    assert r["data_turno"].dt.strftime("%Y-%m-%d").tolist() == ["2020-11-15", "2020-11-29",
+                                                                 "2018-10-28", "2024-10-06"]
+    assert r["mes_ano"].astype(str).tolist() == ["2020-11", "2020-11", "2018-10", "2024-10"]
+
+
+def test_datas_turno_cobrem_todos_os_anos():
+    assert sorted(DATAS_TURNO) == ANOS
+    assert all(set(t) == {1, 2} and t[1] < t[2] for t in DATAS_TURNO.values())
+
+
 def test_marcar_inconsistentes_e_implausiveis():
     df = pd.DataFrame([_celula(), _celula(qt_abstencao=5),
                        _celula(cd_faixa_etaria=1700, cd_grau_escolaridade=8)])
@@ -172,6 +203,7 @@ def test_integracao_conta_nao_casados():
     assert len(r) == 1 and pd.isna(r["cd_municipio_ibge"].iloc[0])
     nao_casados = log.tabela().set_index("problema").filter(like="depois da junção", axis=0)
     assert nao_casados["linhas_afetadas"].tolist() == [1]
+    assert nao_casados["linhas_depois"].tolist() == [1]  # medido na tabela juntada
 
 
 def test_integracao_par_acrescentado_e_variaveis():
