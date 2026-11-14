@@ -14,6 +14,8 @@ Projeto da disciplina de Big Data que reúne os dados de perfil de compareciment
 
 ## Entregáveis
 
+- [Ficha de proposta](reports/ficha_proposta.md)
+- [Dicionário de dados](reports/dicionario_dados.md)
 - TODO: relatório final em `reports/`
 - TODO: notebooks de análise em `notebooks/`
 - TODO: figuras em `reports/figuras/`
