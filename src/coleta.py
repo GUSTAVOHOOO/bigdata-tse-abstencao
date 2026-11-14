@@ -25,6 +25,13 @@ def com_retry(func: Callable[[], T], tentativas: int = 5, espera: float = 2.0) -
     for i in range(tentativas):
         try:
             return func()
+        except requests.HTTPError as e:
+            resp = e.response
+            if resp is not None and 400 <= resp.status_code < 500:
+                raise  # erro do cliente: repetir nao adianta
+            if i == tentativas - 1:
+                raise
+            time.sleep(espera * 2**i)
         except (requests.RequestException, OSError):
             if i == tentativas - 1:
                 raise
@@ -70,15 +77,52 @@ def baixar(url: str, destino: Path, tentativas: int = 5, espera: float = 2.0) ->
     return destino
 
 
+MARCADOR_DERIVADOS = ".derivados_brasil_ok"
+
+
+def _derivar_ufs_ausentes(zf: zipfile.ZipFile, nome_brasil: str, pasta: Path,
+                          ufs_existentes: set[str]) -> None:
+    """Le o BRASIL em streaming e grava as UFs sem arquivo proprio (bytes crus)."""
+    abertos: dict[str, "object"] = {}
+    cabecalho = b""
+    try:
+        with zf.open(nome_brasil) as src:
+            for n, linha in enumerate(src):
+                if n == 0:
+                    cabecalho = linha
+                    continue
+                campos = linha.split(b";", 5)
+                if len(campos) < 5:
+                    continue
+                uf = campos[4].strip().strip(b'"').decode(ENCODING)
+                if uf in ufs_existentes:
+                    continue
+                if uf not in abertos:
+                    alvo = pasta / Path(nome_brasil).name.replace("BRASIL", uf)
+                    abertos[uf] = open(alvo, "wb")
+                    abertos[uf].write(cabecalho)
+                abertos[uf].write(linha)
+    finally:
+        for f in abertos.values():
+            f.close()
+
+
 def extrair_csvs(zip_path: Path, pasta: Path) -> list[Path]:
-    """Extrai apenas os CSVs por UF (ignora *BRASIL*, que duplica as linhas)."""
+    """Extrai os CSVs por UF; UFs presentes so no *BRASIL* viram arquivos derivados.
+
+    O BRASIL em si nunca vai para o disco (duplica as demais linhas).
+    """
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
     saida = []
+    brasil = None
     with zipfile.ZipFile(zip_path) as z:
         for nome in z.namelist():
             base = Path(nome).name
-            if not base.lower().endswith(".csv") or "BRASIL" in base.upper():
+            if not base.lower().endswith(".csv"):
+                continue
+            if "BRASIL" in base.upper():
+                brasil = nome
                 continue
             alvo = pasta / base
             if not alvo.exists() or alvo.stat().st_size != z.getinfo(nome).file_size:
@@ -86,6 +130,13 @@ def extrair_csvs(zip_path: Path, pasta: Path) -> list[Path]:
                     while bloco := src.read(CHUNK):
                         dst.write(bloco)
             saida.append(alvo)
+        marcador = pasta / MARCADOR_DERIVADOS
+        if brasil is not None:
+            ufs = {Path(a).stem.split("_")[-1] for a in saida}
+            if not marcador.exists():
+                _derivar_ufs_ausentes(z, brasil, pasta, ufs)
+                marcador.write_text("ok")
+            saida += [c for c in pasta.glob("*.csv") if c not in saida]
     return sorted(saida)
 
 
