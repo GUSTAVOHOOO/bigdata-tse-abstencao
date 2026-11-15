@@ -67,15 +67,15 @@ As derivações pedidas também estão no log: `data_turno` e `mes_ano`, `voto_f
 
 A silver (`data/silver/tse/`, Parquet particionado por ano e UF) tem 26.310.182 linhas e 46 colunas tipadas, 16,8% menos linhas que a bronze, e ocupa 197 MB. Quase toda a redução vem de 2024. A gold (`data/gold/`) tem quatro tabelas agregadas (município, UF, perfil e turnos), com 1,9 MB.
 
-![Figura 9. Efeito da limpeza: linhas por etapa e ausentes antes e depois.](figuras/fig_09_limpeza_antes_depois.png){width=100%}
+![Figura 1. Efeito da limpeza: linhas por etapa e ausentes antes e depois.](figuras/fig_09_limpeza_antes_depois.png){width=100%}
 
 # 4. Resultados
 
-As nove figuras estão em `reports/figuras/`. O título de cada figura é a conclusão que ela mostra, calculada a partir da gold.
+As nove figuras estão em `reports/figuras/`; os nomes dos arquivos seguem a numeração do notebook, e a deste relatório segue a ordem de leitura. O título de cada figura é a conclusão que ela mostra, calculada a partir da gold.
 
 **P1. Evolução, tipo de eleição e turno.** A abstenção não cresceu de forma contínua. No 1º turno foi de 20,2% (2018), 23,1% (2020), 20,8% (2022) e 21,7% (2024): as municipais ficam acima das gerais. Nas gerais, o 2º turno repete o eleitorado e a taxa quase não muda (21,2% e 20,4%). Nas municipais, só cidades com mais de 200 mil eleitores votam de novo; nelas o 2º turno chegou a 29,5% (2020) e 29,3% (2024), contra 26,9% e 25,3% no 1º turno das mesmas cidades.
 
-![Figura 1. Série por eleição e turno.](figuras/fig_01_abstencao_por_eleicao.png){width=95%}
+![Figura 2. Série por eleição e turno.](figuras/fig_01_abstencao_por_eleicao.png){width=95%}
 
 **P2. Idade e voto facultativo.** A taxa tem forma de U. Em 2024, foi de 10,6% entre 16 e 17 anos, 24,7% entre 25 e 34, 13,7% entre 45 e 59 e 51,1% aos 70 ou mais, 2,7 vezes a dos obrigatórios de 18 a 69 anos (18,6%). Entre os de 70 ou mais, a taxa caiu de 62,7% (2018) para 51,1% (2024), passando por 64,0% em 2020 e 58,8% em 2022. Os facultativos (16 e 17 anos, 70 ou mais, analfabetos) são 12% a 13% dos aptos e respondem por 26% a 32% de toda a abstenção. O peso vem dos idosos, porque os jovens de 16 e 17 anos votam mais que a média.
 
@@ -83,21 +83,21 @@ As nove figuras estão em `reports/figuras/`. O título de cada figura é a conc
 
 **P3. Escolaridade.** Há gradiente, mais forte nas eleições gerais: em 2022, de 52,1% entre analfabetos a 11,9% no superior completo. Nas municipais ele achata no topo (2024: 40,4% contra 17,7%), e o superior incompleto (21,7%) passa do médio completo (18,6%). Parte do gradiente vem da idade, já que os analfabetos são mais velhos: entre 18 e 69 anos, em 2024, nenhum nível passa de 24,4% (analfabetos), e entre os de 70 ou mais os analfabetos chegam a 67,1%.
 
-![Figura 6. Faixa etária × escolaridade, 2024.](figuras/fig_06_faixa_x_escolaridade_2024.png){width=95%}
+![Figura 4. Faixa etária × escolaridade, 2024.](figuras/fig_06_faixa_x_escolaridade_2024.png){width=95%}
 
-**P4. UFs, regiões e 2020.** O Sudeste tem a maior taxa nos quatro anos (22,0% a 26,3%). A menor é a do Sul nas gerais (17,3% e 19,3%) e a do Nordeste nas municipais (18,5% e 16,5%). Em 2024, a mais alta foi a do RJ (26,2%) e a mais baixa a do CE (14,2%); 8 das 10 UFs com menor abstenção são do Nordeste. Por município, a mediana de 2024 vai de 14,2% no Nordeste a 19,4% no Sudeste, com muita sobreposição entre regiões. Dos 403 municípios com 25% ou mais, 228 são do Sudeste e 5 do Nordeste. Entre as duas eleições gerais, a taxa subiu em 21 das 27 UFs, de +3,4 pontos no AC a −1,4 no TO. Em 2020, a taxa ficou acima da média dos outros anos em 20 das 26 UFs, mas 2024, a outra municipal, ficou perto (23,1% contra 21,7% no país). A maior parte da alta de 2020 acompanha o tipo de eleição. A diferença de cerca de 1,5 ponto que sobra pode refletir a pandemia, e esta análise não consegue isolar esse efeito.
+**P4. UFs, regiões e 2020.** O Sudeste tem a maior taxa nos quatro anos (22,0% a 26,3%). A menor é a do Sul nas gerais (17,3% e 19,3%) e a do Nordeste nas municipais (18,5% e 16,5%). Em 2024, a mais alta foi a do RJ (26,2%) e a mais baixa a do CE (14,2%); 8 das 10 UFs com menor abstenção são do Nordeste. Por município, a mediana de 2024 vai de 14,2% no Nordeste a 19,4% no Sudeste, com muita sobreposição entre regiões. Dos 403 municípios com 25% ou mais, 228 são do Sudeste e 5 do Nordeste. Entre as duas eleições gerais, a taxa subiu em 21 das 27 UFs, de +3,4 pontos no AC a −1,4 no TO. Em 2020, a taxa ficou acima da média dos outros anos em 20 das 26 UFs, mas a maior parte dessa alta acompanha o tipo de eleição: contra a outra municipal, a diferença no país é de 1,4 ponto (23,1% em 2020 e 21,7% em 2024). Esse 1,4 ponto pode refletir a pandemia, mas esta análise não consegue isolar esse efeito.
 
-![Figura 2. Abstenção por UF, 2024.](figuras/fig_02_abstencao_por_uf_2024.png){width=62%}
+![Figura 5. Abstenção por UF, 2024.](figuras/fig_02_abstencao_por_uf_2024.png){width=62%}
 
-![Figura 4. Distribuição municipal por região, 2024.](figuras/fig_04_distribuicao_por_regiao.png){width=95%}
+![Figura 6. Distribuição municipal por região, 2024.](figuras/fig_04_distribuicao_por_regiao.png){width=95%}
 
 ![Figura 7. Mapa municipal, 2024.](figuras/fig_07_mapa_municipal_2024.png){width=72%}
 
 ![Figura 8. Variação por UF entre as eleições gerais de 2018 e 2022.](figuras/fig_08_mapa_uf_variacao_2018_2022.png){width=72%}
 
-**P5. População e PIB.** A população é a variável do IBGE mais associada à abstenção, e só nas municipais: o Spearman é 0,65 (2020) e 0,59 (2024), contra 0,16 (2018) e 0,19 (2022). Na Figura 5 (2022), a mediana sobe com a população até algumas dezenas de milhares de habitantes e cai nas cidades maiores. O PIB per capita tem relação fraca e de sinal instável (−0,17, 0,10, −0,15 e 0,20).
+**P5. População e PIB.** A população é a variável do IBGE mais associada à abstenção, e só nas municipais: o Spearman é 0,65 (2020) e 0,59 (2024), contra 0,16 (2018) e 0,19 (2022). Na Figura 9 (2022), a mediana sobe com a população até algumas dezenas de milhares de habitantes e cai nas cidades maiores. O PIB per capita tem relação fraca e de sinal instável (−0,17, 0,10, −0,15 e 0,20).
 
-![Figura 5. Taxa municipal × PIB per capita e população, 2022.](figuras/fig_05_taxa_x_pib_populacao.png){width=100%}
+![Figura 9. Taxa municipal × PIB per capita e população, 2022.](figuras/fig_05_taxa_x_pib_populacao.png){width=100%}
 
 # 5. Limitações
 
