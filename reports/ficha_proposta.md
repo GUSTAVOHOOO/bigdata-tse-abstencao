@@ -19,7 +19,7 @@
 | Municípios | https://servicodados.ibge.gov.br/api/v1/localidades/municipios | 5.571 municípios: código IBGE de 7 dígitos, nome, UF e região |
 | De-para TSE → IBGE | https://raw.githubusercontent.com/betafcc/Municipios-Brasileiros-TSE/master/municipios_brasileiros_tse.csv | Código TSE do município para código IBGE (5.570 pares) |
 
-Licença dos dados do IBGE e do de-para (repositório de terceiros): a confirmar antes da entrega.
+Licenças: os dados do IBGE são públicos e podem ser reutilizados com citação da fonte. O de-para TSE → IBGE (repositório `betafcc/Municipios-Brasileiros-TSE` no GitHub) não declara licença; isso aparece como limitação no relatório.
 
 ## Perguntas de pesquisa
 

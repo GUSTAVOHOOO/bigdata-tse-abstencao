@@ -170,7 +170,7 @@ TEXTOS = {
            "Há 5.751 códigos de município para 5.466 nomes, então juntar por nome trocaria homônimos.",
            "celulas"),
     "11": ("#11 Municípios com abstenção extrema",
-           "Não remover. A marca outlier_iqr é por município e ano, no 1º turno, e não cabe no grão da silver (célula de perfil): será calculada na camada gold (Task 8).",
+           "Não remover. A marca outlier_iqr é por município e ano, no 1º turno, e não cabe no grão da silver (célula de perfil): calculada na camada gold.",
            "A EDA achou 21, 4, 63 e 22 outliers pelo IQR, concentrados no Jequitinhonha (MG) e no interior do AM. "
            "São casos reais (emigração, distância) e o objeto da análise. Nenhuma linha muda nesta etapa.",
            "linhas"),

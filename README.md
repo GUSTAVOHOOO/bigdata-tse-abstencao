@@ -75,10 +75,10 @@ Medidos numa máquina com 15,4 GB de RAM e banda larga doméstica:
 | Passo | Tempo | Disco gerado |
 |---|---|---|
 | Ambiente (`uv`) | ~10 s | ~1 GB em `.venv/` |
-| `coleta.py`, quatro anos | ~8 a 10 min (2024 sozinho: ~2,5 min) | 666 MB de ZIPs, 8,3 GB de CSVs, 218 MB de Parquet |
+| `coleta.py`, quatro anos | ~8 a 10 min (2024 sozinho: ~2,5 min) | 666 MB de ZIPs, 8,3 GB de CSVs, 217 MB de Parquet |
 | `coleta.py --benchmark` | ~20 s | `reports/benchmark_csv_parquet.csv` |
 | `ibge.py` | ~5 s | ~1 MB |
-| `limpeza.py`, quatro anos | 7 a 12 min (2024 sozinho: ~2 min) | 198 MB de silver |
+| `limpeza.py`, quatro anos | 7 a 12 min (2024 sozinho: ~2 min) | 197 MB de silver |
 | `agregacao.py` | menos de 10 s | 1,9 MB de gold |
 | `graficos.py` | ~1 min | nove PNG em `reports/figuras/` e ~21 MB de malhas do IBGE em `data/bronze/geo/` |
 | notebook | ~7 min | nada novo (reaproveita a silver) |
@@ -96,7 +96,7 @@ O total em disco fica perto de 9,4 GB, quase tudo nos CSVs extraídos (fora o am
 - [Benchmark CSV × Parquet](reports/benchmark_csv_parquet.csv)
 - [Log de limpeza](reports/log_limpeza.csv): problema, decisão, justificativa, unidade e linhas afetadas
 - [Ausentes antes e depois da limpeza](reports/ausentes_antes_depois.csv)
-- [Figuras](reports/figuras/): nove PNG, uma por pergunta e uma do efeito da limpeza
+- [Figuras](reports/figuras/): nove PNG: oito respondem às perguntas de pesquisa e uma mostra o efeito da limpeza
 
 ## Fontes e licenças
 

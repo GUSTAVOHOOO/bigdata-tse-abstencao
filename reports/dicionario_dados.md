@@ -21,7 +21,7 @@ Nas análises por perfil, as linhas com sentinela devem ser tratadas de forma ex
 
 ## Fonte 1: TSE, perfil de comparecimento e abstenção
 
-Arquivos: `perfil_comparecimento_abstencao_{ano}_{UF}.csv`, extraídos dos ZIPs de 2018, 2020, 2022 e 2024. O arquivo `_BRASIL.csv` foi excluído, porque repete todas as linhas das UFs. Leiaute: `leiame.pdf` (dentro de cada ZIP). Total: 31.633.820 linhas.
+Arquivos: `perfil_comparecimento_abstencao_{ano}_{UF}.csv`, extraídos dos ZIPs de 2018, 2020, 2022 e 2024. O arquivo `_BRASIL.csv` repete todas as linhas das UFs e não é usado inteiro: a coleta o lê em fluxo e tira dele só as linhas de DF e `ZZ`, que não existem nos arquivos por UF. Leiaute: `leiame.pdf` (dentro de cada ZIP). Total: 31.633.820 linhas.
 
 | variavel_original | variavel_snake_case | tipo | usada | descricao | dominio |
 |---|---|---|---|---|---|
@@ -136,3 +136,41 @@ Fonte: repositório `betafcc/Municipios-Brasileiros-TSE` (CSV de terceiros). A t
 | cd_municipio_ibge | cd_municipio_ibge | string | ✓ | Código IBGE do município, com 7 dígitos. | 5.570 valores distintos. |
 
 Junção: `cd_municipio` (TSE) = `cd_municipio_tse`. Não há correspondência para os códigos do exterior (`ZZ`, em 2018 e 2022) nem para Boa Esperança do Norte (MT, código TSE 73709), que aparece só em 2024.
+
+## Variáveis derivadas (silver e gold)
+
+Estas colunas não existem nos arquivos do TSE. O projeto as cria na limpeza (`src/limpeza.py`, camada silver) e na agregação (`src/agregacao.py`, camada gold). Tipos e domínios foram lidos dos Parquet.
+
+### Silver (`data/silver/tse/`)
+
+| variavel | camada | tipo | descricao | dominio |
+|---|---|---|---|---|
+| nm_regiao | silver | category | Grande região da UF. Nulo no exterior. | Centro-Oeste, Nordeste, Norte, Sudeste, Sul. Nulo em 141.100 linhas (`ZZ`). |
+| faixa_etaria_agrupada | silver | category (ordenada) | Faixa etária reagrupada a partir de `cd_faixa_etaria`. | 16–17, 18–24, 25–34, 35–44, 45–59, 60–69, 70+. Nulo em 13.575 linhas (idade inválida). |
+| grupo_idade | silver | category (ordenada) | Grupo de idade pela regra do voto: facultativo aos 16–17 e aos 70 ou mais, obrigatório entre 18 e 69. | 16–17, 18–69, 70+. Nulo em 13.575 linhas. |
+| voto_facultativo | silver | boolean (nulável) | Verdadeiro para 16–17 anos, 70 anos ou mais, ou analfabeto (CF, art. 14, § 1º, II). Nulo quando idade ou escolaridade é desconhecida. | Verdadeiro (9.065.339), falso (17.185.523), nulo (59.320). |
+| exterior | silver | boolean | Linha do exterior (`sg_uf` = `ZZ`). | Verdadeiro em 141.100 linhas. |
+| tem_2o_turno | silver | boolean | O município teve 2º turno no ano. | Verdadeiro em 18.458.544 linhas, falso em 7.851.638. |
+| data_turno | silver | date | Data oficial do turno, pelo calendário do TSE. | De 07/10/2018 a 27/10/2024; sem nulos. |
+| mes_ano | silver | category | Mês e ano do turno, no formato AAAA-MM. | 2018-10, 2020-11, 2022-10, 2024-10. |
+| cd_municipio_ibge | silver | string | Código IBGE do município (7 dígitos), obtido pelo de-para TSE → IBGE. | De 1100015 a 5300108. Nulo no exterior (141.100 linhas). |
+| populacao | silver | int32 | População do município no ano da eleição. | 776 a 12.325.232. Nulo em 141.609 linhas (exterior e 509 linhas de 2024 sem dado de população). |
+| fonte_populacao | silver | category | Origem da população. | `censo_4709` (8.651.140 linhas, 2022); `estimativa_6579` (17.517.942). Nulo no exterior. |
+| ano_pib | silver | int16 | Ano do PIB municipal associado à eleição (o PIB de 2023 vai para 2024). | De 2018 a 2023. Nulo em 141.609 linhas. |
+| pib_per_capita | silver | float64 | PIB por habitante, em reais, do ano `ano_pib`. | 4.778,49 a 842.004,60. Nulo em 141.609 linhas. |
+| inconsistente | silver | boolean | Marca, sem remover, linhas em que `qt_aptos` ≠ `qt_comparecimento` + `qt_abstencao`. | Falso em todas as 26.310.182 linhas. |
+| perfil_implausivel | silver | boolean | Marca, sem corrigir, células de 16–17 anos com superior completo. | Verdadeiro em 1.605 linhas. |
+
+### Gold (`data/gold/`)
+
+As tabelas gold usam só o 1º turno, exceto `turnos`. A taxa é sempre a soma das abstenções dividida pela soma dos aptos do grupo.
+
+| variavel | camada | tipo | descricao | dominio |
+|---|---|---|---|---|
+| taxa_abstencao | gold | float64 | `qt_abstencao / qt_aptos` do grupo, em fração de 0 a 1. | Em `municipio_ano`, de 0 a 0,995. Em `turnos`, de 0,202 a 0,295. |
+| abstencoes_por_100k_hab | gold | float64 | Abstenções por 100 mil habitantes do município (`municipio_ano`). Nulo sem população. | 2.487 a 122.679. Nulo em 353 linhas (exterior e município sem população). |
+| pct_70_mais | gold | float64 | Fração dos aptos do município com 70 anos ou mais. | 0 a 0,333. |
+| pct_16_17 | gold | float64 | Fração dos aptos do município com 16 ou 17 anos. | 0 a 0,066. |
+| pct_superior | gold | float64 | Fração dos aptos do município com superior completo. | 0 a 1. |
+| outlier_iqr | gold | boolean (nulável) | Município-ano com taxa fora de [Q1 − 1,5·IQR; Q3 + 1,5·IQR], com quartis calculados por ano e sem o exterior. Nulo no exterior ou sem taxa. | Verdadeiro (110), falso (22.167), nulo (352). |
+| conjunto | gold | string | Conjunto de municípios da tabela `turnos`. | `com_2o_turno` (municípios com 2º turno no ano, nos dois turnos) e `todos` (1º turno de todos os municípios). |

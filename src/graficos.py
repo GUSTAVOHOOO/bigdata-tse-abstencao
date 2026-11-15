@@ -157,10 +157,18 @@ def resumo_perfil(perfil: pd.DataFrame) -> dict:
     celulas = taxas_por(base, ["faixa_etaria_agrupada", "ds_grau_escolaridade"])
     adultos = taxas_por(base[base["grupo_idade"] == GRUPO_OBRIGATORIO], ["ds_grau_escolaridade"])
     analf_70 = celulas[(celulas["faixa_etaria_agrupada"] == "70+") & (celulas["ds_grau_escolaridade"] == "ANALFABETO")]
+    sup_70 = celulas[(celulas["faixa_etaria_agrupada"] == "70+") & (celulas["ds_grau_escolaridade"] == "SUPERIOR COMPLETO")]
+    # Faixas em que as duas células (analfabeto e superior completo) aparecem no gráfico, isto é, têm aptos suficientes.
+    par = celulas[celulas["ds_grau_escolaridade"].isin(["ANALFABETO", "SUPERIOR COMPLETO"])
+                  & (celulas["qt_aptos"] >= MIN_APTOS_CELULA)]
+    par = par.pivot(index="faixa_etaria_agrupada", columns="ds_grau_escolaridade", values="taxa").dropna()
     return {
         "celulas": celulas,
         "max_70_analfabeto": float(analf_70["taxa"].iloc[0]),
+        "max_70_superior": float(sup_70["taxa"].iloc[0]),
         "max_18_69": float(adultos["taxa"].max()),
+        "analfabeto_acima_em_todas": bool((par["ANALFABETO"] > par["SUPERIOR COMPLETO"]).all()),
+        "faixas_comparadas": list(par.index),
     }
 
 
@@ -481,8 +489,12 @@ def fig_05_taxa_x_pib_populacao() -> Path:
 def fig_06_faixa_x_escolaridade() -> Path:
     r = resumo_perfil(_gold("perfil_ano").query("ano == @ANO_ULTIMO"))
     celulas = r["celulas"]
-    titulo = (f"Em {ANO_ULTIMO}, a abstenção chega a {_pct(r['max_70_analfabeto'])} entre analfabetos de 70 anos ou "
-              f"mais; entre 18 e 69 anos, nenhum nível de escolaridade passa de {_pct(r['max_18_69'])}")
+    if r["analfabeto_acima_em_todas"]:
+        titulo = (f"Em {ANO_ULTIMO}, analfabetos se abstêm mais que quem tem superior completo em todas as faixas de "
+                  f"idade exibidas; aos 70 anos ou mais, {_pct(r['max_70_analfabeto'])} contra {_pct(r['max_70_superior'])}")
+    else:
+        titulo = (f"Em {ANO_ULTIMO}, a abstenção chega a {_pct(r['max_70_analfabeto'])} entre analfabetos de 70 anos ou "
+                  f"mais, contra {_pct(r['max_70_superior'])} no superior completo")
     subtitulo = (f"Taxa de abstenção (1º turno, sem exterior) por faixa etária e escolaridade, somando gênero. Células "
                  f"com menos de {_inteiro(MIN_APTOS_CELULA)} aptos ficam cinzas. 'NÃO INFORMADO' fica fora do gráfico.")
 
