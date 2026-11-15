@@ -29,7 +29,7 @@ from matplotlib.cm import ScalarMappable  # noqa: E402
 from matplotlib.colors import TwoSlopeNorm  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
-from matplotlib.ticker import FuncFormatter  # noqa: E402
+from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
 
 from src.config import BRONZE, FIGURAS, GOLD, REPORTS  # noqa: E402
 
@@ -333,6 +333,7 @@ def fig_01_abstencao_por_eleicao() -> Path:
                         va="bottom" if lado > 0 else "top", fontsize=9, color=TINTA)
     ax.set_xticks(anos)
     ax.set_xticklabels([f"{a}\n{'geral' if a in (2018, 2022) else 'municipal'}" for a in anos])
+    ax.yaxis.set_major_locator(MultipleLocator(0.02))  # marcas em 2 p.p.: rótulos inteiros e exatos
     ax.yaxis.set_major_formatter(_fmt_pct(0))
     ax.set_ylim(0.14, 0.34)
     ax.set_xlim(anos[0] - 0.4, anos[-1] + 0.4)
@@ -500,6 +501,7 @@ def fig_06_faixa_x_escolaridade() -> Path:
     cmap = CMAP_SEQ.copy()
     cmap.set_bad(GRADE)
     ax.imshow(np.ma.masked_invalid(M), cmap=cmap, vmin=0.0, vmax=0.7, aspect="auto")
+    ax.grid(False)  # sem grade por cima das células
     for i in range(len(linhas)):
         for j in range(len(ORDEM_ESCOLARIDADE)):
             if np.isnan(M[i, j]):
@@ -547,20 +549,26 @@ def fig_07_mapa_municipal() -> Path:
                  f"{_pct(mun['taxa_abstencao'].min())} a {_pct(mun['taxa_abstencao'].max())}. Cinza: sem dado. "
                  "Cor pela taxa, não pelo número de eleitores.")
 
-    fig = Figure(figsize=(9, 9.4), facecolor=SUPERFICIE)
+    fig = Figure(figsize=(9, 9.6), facecolor=SUPERFICIE)
     topo = _moldura(fig, titulo, subtitulo)
-    ax = fig.add_axes([0.02, 0.1, 0.8, topo - 0.1 - 0.02])
-    norm = mcolors.Normalize(vmin=0.0, vmax=0.45)
-    j.plot(column="taxa_abstencao", cmap=CMAP_SEQ, norm=norm, ax=ax, linewidth=0.05, edgecolor=SUPERFICIE,
-           missing_kwds={"color": GRADE, "edgecolor": SUPERFICIE, "linewidth": 0.05})
+    ax = fig.add_axes([0.02, 0.15, 0.96, topo - 0.15 - 0.02])
+    # Classes fixas de 5 p.p. com degraus claros na cauda alta (a manchete trata de 25% ou mais).
+    limites = [0.0, 0.15, 0.20, 0.25, 0.30, 1.0]
+    rotulos = ["menos de 15%", "15% a 20%", "20% a 25%", "25% a 30%", "30% ou mais"]
+    tons = [SEQ[200], SEQ[300], SEQ[400], SEQ[550], SEQ[700]]  # claro -> escuro, passos bem separados
+    cmap_classes = mcolors.ListedColormap(tons)
+    norm = mcolors.BoundaryNorm(limites, cmap_classes.N)
+    j["classe"] = pd.cut(j["taxa_abstencao"], bins=limites, labels=False, right=False)
+    j.plot(column="classe", cmap=cmap_classes, norm=mcolors.BoundaryNorm(range(6), cmap_classes.N), ax=ax,
+           linewidth=0.05, edgecolor=SUPERFICIE, missing_kwds={"color": GRADE, "edgecolor": SUPERFICIE,
+                                                                "linewidth": 0.05})
     ax.set_axis_off()
-    cax = fig.add_axes([0.84, 0.25, 0.02, 0.45])
-    cb = fig.colorbar(ScalarMappable(norm=norm, cmap=CMAP_SEQ), cax=cax)
-    cb.set_ticks([0, 0.1, 0.2, 0.3, 0.4])
-    cb.set_ticklabels(["0%", "10%", "20%", "30%", "40%"])
-    cb.outline.set_visible(False)
-    cb.ax.tick_params(labelsize=8, colors=TINTA_2, length=0)
-    cb.set_label("abstenção", fontsize=8, color=TINTA_2)
+    contagem = j["classe"].value_counts().reindex(range(5), fill_value=0)
+    alças = [Patch(facecolor=tons[k], edgecolor=SUPERFICIE,
+                   label=f"{rotulos[k]} ({_inteiro(contagem[k])} municípios)") for k in range(5)]
+    alças.append(Patch(facecolor=GRADE, edgecolor=SUPERFICIE, label="sem dado"))
+    fig.legend(handles=alças, loc="lower center", bbox_to_anchor=(0.5, 0.065), ncol=3, frameon=False,
+               fontsize=8.5, labelcolor=TINTA_2, title="Abstenção no 1º turno (classes fixas)", title_fontsize=9)
     _rodape(fig, f"Fonte: TSE ({ANO_ULTIMO}), IBGE (malha municipal de {MALHA_ANO}). Municípios do TSE sem polígono: "
                  f"{sem_malha}; polígonos sem dado do TSE: {sem_dado}.")
     return _salvar(fig, "fig_07_mapa_municipal_2024")
