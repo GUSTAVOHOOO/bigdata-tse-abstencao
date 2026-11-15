@@ -25,14 +25,17 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
-import duckdb
-import numpy as np
-import pandas as pd
-import pyarrow as pa
-import pyarrow.dataset as ds
-import pyarrow.parquet as pq
+if __package__ in (None, ""):  # execução direta: src/limpeza.py
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import ANOS, REPORTS, SENTINELAS, SILVER
+import duckdb  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import pyarrow as pa  # noqa: E402
+import pyarrow.dataset as ds  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+
+from src.config import ANOS, REPORTS, SENTINELAS, SILVER  # noqa: E402
 
 SILVER_TSE = SILVER / "tse"
 LOG_PATH = REPORTS / "log_limpeza.csv"
